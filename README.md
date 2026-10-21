@@ -215,7 +215,8 @@ The version is the one in the tag; `--version` shows it. Local builds show `0.0.
 
 - **SQL logins only:** no Windows authentication and no Microsoft Entra ID (Azure AD) sign-in.
 - **Not scripted:** schemas, sequences, synonyms, alias types (`CREATE TYPE … FROM`), database-level triggers,
-  users, roles and permissions.
+  and SQL Server security: logins, database users, database roles and permissions (`GRANT` / `DENY`). Tables of
+  your own that hold users, roles or permissions are ordinary tables and are scripted like any other.
 - The order of rows in the data files is the one SQL Server returns; it can differ between runs (which is why it
   does not count as a change).
 - The macOS executables are not notarized (see [Download](#download)).

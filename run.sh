@@ -3,7 +3,7 @@
 # are passed through, e.g.:
 #   ./run.sh                  (no arguments: asks for everything, remembering the last answers)
 #   ./run.sh --help
-#   ./run.sh -S localhost -d WheelLog -U myuser --trust-server-certificate -o ../WheelLogWebApp/Database
+#   ./run.sh -S localhost -d MyDb -U mylogin --trust-server-certificate -o ./Database
 # If it is not executable yet: chmod +x run.sh (or run it as: sh run.sh ...)
 
 set -eu

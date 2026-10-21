@@ -2,7 +2,7 @@
 # Runs SQL Server DB Script Exporter (SqlServerDbScriptExporter.cs). All arguments are passed through, e.g.:
 #   .\run.ps1                 (no arguments: asks for everything, remembering the last answers)
 #   .\run.ps1 --help
-#   .\run.ps1 -S localhost -d WheelLog -U myuser --trust-server-certificate -o ..\WheelLogWebApp\Database
+#   .\run.ps1 -S localhost -d MyDb -U mylogin --trust-server-certificate -o .\Database
 
 $ErrorActionPreference = 'Stop'
 

@@ -73,11 +73,15 @@ var fileEncoding = new UnicodeEncoding(bigEndian: false, byteOrderMark: true);
 
 var interactive = args.Length == 0;
 
-// Always wait for a key at the end (also after a crash), however the app was started - e.g. a double-clicked
-// .exe gets a console window that Windows closes as soon as the app ends. Not with --no-pause (unattended runs
-// from a terminal), nor when the input is redirected (piped or scripted): there is no key to wait for. Checked
-// before parsing, so it also holds when the other arguments are wrong.
-var pauseAtExit = !Console.IsInputRedirected && !args.Contains("--no-pause");
+// Wait for a key at the end (also after a crash) when an export ran, and in interactive mode also on an error or
+// a cancel - e.g. a double-clicked .exe gets a console window that Windows closes as soon as the app ends, before
+// its result or error could be read. Not for --help, --version, invalid options, or a scripted run that stops
+// before exporting (a failed connection): those exit at once. Never with --no-pause (unattended runs from a
+// terminal), nor when the input is redirected (piped or scripted): there is no key to wait for. --no-pause is
+// checked before parsing, so it also holds when the other arguments are wrong.
+var pauseAllowed = !Console.IsInputRedirected && !args.Contains("--no-pause");
+// Set once the export starts (see ShouldPause).
+var exporting = false;
 
 // The temporary files of this run (see TempFile). Each is deleted as soon as it is done with; what is still left
 // (stopped with Ctrl+C, a crash, a file that could not be deleted at that moment) is deleted at the end.
@@ -86,7 +90,7 @@ Console.CancelKeyPress += (_, _) => DeleteTempFiles();
 AppDomain.CurrentDomain.UnhandledException += (_, e) =>
 {
     DeleteTempFiles();
-    if (pauseAtExit)
+    if (ShouldPause())
     {
         Console.Error.WriteLine();
         Console.Error.WriteLine($"error: {e.ExceptionObject}");
@@ -278,6 +282,7 @@ List<Table>? allTables = null;
 // Every object seen ("schema.name"), to warn about --objects names that do not exist.
 HashSet<string> seenObjects = new(StringComparer.OrdinalIgnoreCase);
 
+exporting = true;
 AnsiConsole.Progress()
     .AutoClear(false)
     .HideCompleted(false)
@@ -352,7 +357,7 @@ if (orphans.Count > 0)
 return Exit(report.Count(Outcome.Failed) > 0 || deleteFailed ? 1 : 0);
 
 // Every way out of the app goes through here: it removes what is left of the temporary files, and waits for a
-// key (see pauseAtExit).
+// key when it should (see pauseAllowed).
 int Exit(int exitCode)
 {
     DeleteTempFiles();
@@ -364,13 +369,15 @@ int Exit(int exitCode)
         }
     }
 
-    if (pauseAtExit)
+    if (ShouldPause())
     {
         Pause();
     }
 
     return exitCode;
 }
+
+bool ShouldPause() => pauseAllowed && (exporting || interactive);
 
 // A new temporary file in directory, for fileName: next to it, so it can replace the file in one move. Its name
 // (".<file name>.<32 hex digits>.tmp") is never a <schema>.<name>.<suffix>.sql, so it is never taken for a script.
@@ -1945,7 +1952,7 @@ sealed class Options
                     options.Prune = true;
                     break;
                 case "--no-pause":
-                    // Handled before parsing (pauseAtExit).
+                    // Handled before parsing (pauseAllowed).
                     break;
                 case "--only":
                     foreach (var folder in Values())
@@ -2047,9 +2054,9 @@ sealed class Options
               --version                   Show the version and exit
 
         Examples:
-          ./run.sh
-          ./run.sh -S localhost -d WheelLog -U myuser --trust-server-certificate -o ../WheelLogWebApp/Database
-          ./run.sh -S localhost -d WheelLog -U myuser --content data --objects dbo.Role,dbo.Permission --data-folder MetaData -o ../WheelLogWebApp/Database
-          ./run.ps1 -S myserver.database.windows.net -d WheelLog -U myuser --single-file --content all -o C:\Backups\WheelLog.sql
+          <app>
+          <app> -S myserver.database.windows.net -d MyDb -U mylogin -o ./Database
+          <app> -S localhost -d MyDb -U mylogin --trust-server-certificate --content data --objects dbo.Country,dbo.Status --data-folder MetaData -o ./Database
+          <app> -S localhost -d MyDb -U mylogin --trust-server-certificate --single-file --content all -o ./MyDb.sql --no-pause
         """);
 }
