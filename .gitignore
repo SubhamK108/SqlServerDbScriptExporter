@@ -426,3 +426,6 @@ FodyWeavers.xsd
 
 # Official VS Code C# Dev Kit Extension exclusion
 #*.lscache
+
+# SQL Server DB Script Exporter: the interactive answers of the last run (personal, machine-specific)
+SqlServerDbScriptExporter.settings.json

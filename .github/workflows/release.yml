@@ -1,0 +1,200 @@
+# Builds SQL Server DB Script Exporter for every OS and architecture, and publishes them as a GitHub release.
+#
+#   Release:  push a tag "release/<version>", e.g.  git tag release/1.2.0 && git push origin release/1.2.0
+#             (a version with a pre-release part, e.g. release/1.3.0-beta.1, becomes a pre-release)
+#   Test run: Actions > Release > Run workflow, with a version: builds the downloads (as workflow artifacts)
+#             without publishing a release - also when started from a tag ("Use workflow from").
+#
+# Each download is one self-contained executable (no .NET needed), built with publish.sh like a local build, with
+# the version stamped in (--version shows it). The release notes are a download overview plus GitHub's generated
+# notes (the pull requests and commits since the previous release).
+
+name: Release
+
+on:
+  push:
+    tags: ['release/*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to build, e.g. 1.2.0 (a test run: no release is published)'
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  version:
+    name: Version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      prerelease: ${{ steps.version.outputs.prerelease }}
+    steps:
+      - name: Work out the version
+        id: version
+        shell: bash
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          # A pushed tag gives the version; a manual run uses the one typed in (even when run from a tag).
+          if [ "$GITHUB_EVENT_NAME" = push ]; then version="${GITHUB_REF_NAME#release/}"; else version="$INPUT_VERSION"; fi
+          if ! printf '%s' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'; then
+            echo "::error::'$version' is not a version like 1.2.0 or 1.3.0-beta.1 (tag: release/1.2.0)."
+            exit 1
+          fi
+          case "$version" in *-*) prerelease=true ;; *) prerelease=false ;; esac
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$prerelease" >> "$GITHUB_OUTPUT"
+          echo "Version $version (pre-release: $prerelease)"
+
+  build:
+    name: Build ${{ matrix.rid }}
+    needs: version
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Each OS on its own runner: macOS executables must be signed to run on Apple Silicon, and the .NET SDK
+          # only signs them when it builds on macOS.
+          - { rid: win-x64, os: windows-latest }
+          - { rid: win-arm64, os: windows-latest }
+          - { rid: linux-x64, os: ubuntu-latest }
+          - { rid: linux-arm64, os: ubuntu-latest }
+          - { rid: linux-arm, os: ubuntu-latest }
+          - { rid: osx-x64, os: macos-latest }
+          - { rid: osx-arm64, os: macos-latest }
+    runs-on: ${{ matrix.os }}
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      NAME: SqlServerDbScriptExporter-${{ needs.version.outputs.version }}-${{ matrix.rid }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Publish
+        shell: bash
+        run: sh publish.sh -r "${{ matrix.rid }}" --app-version "$VERSION" -o out
+
+      - name: Add the licence
+        shell: bash
+        run: cp LICENSE out/
+
+      # Windows: .zip. Linux and macOS: .tar.gz, which keeps the executable flag.
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Compress-Archive -Path out/* -DestinationPath "dist/$env:NAME.zip"
+
+      - name: Package (Linux, macOS)
+        if: runner.os != 'Windows'
+        shell: bash
+        env:
+          # macOS tar: no "._<file>" metadata entries in the archive (they show up as stray files elsewhere).
+          COPYFILE_DISABLE: '1'
+        run: |
+          mkdir -p dist
+          tar -czf "dist/$NAME.tar.gz" -C out .
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ env.NAME }}
+          path: dist/*
+          if-no-files-found: error
+
+  release:
+    name: Publish the release
+    # Only for a pushed tag; a manual run only builds (also when started from a tag).
+    if: github.event_name == 'push'
+    needs: [version, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Checksums
+        working-directory: dist
+        run: sha256sum * > SHA256SUMS.txt
+
+      - name: Release notes
+        shell: bash
+        run: |
+          describe() {
+            case "$1" in
+              win-x64) echo "Windows (x64)" ;;
+              win-arm64) echo "Windows (ARM64)" ;;
+              linux-x64) echo "Linux (x64)" ;;
+              linux-arm64) echo "Linux (ARM64)" ;;
+              linux-arm) echo "Linux (ARM 32-bit, e.g. Raspberry Pi)" ;;
+              osx-x64) echo "macOS (Intel)" ;;
+              osx-arm64) echo "macOS (Apple Silicon)" ;;
+              *) echo "$1" ;;
+            esac
+          }
+          {
+            echo "## Downloads"
+            echo
+            echo "| System | Download |"
+            echo "|---|---|"
+            # Windows, macOS, Linux; then anything else built (a platform added to the matrix but not listed here).
+            listed=" win-x64 win-arm64 osx-arm64 osx-x64 linux-x64 linux-arm64 linux-arm "
+            for rid in $listed; do
+              for file in "dist/SqlServerDbScriptExporter-$VERSION-$rid.zip" "dist/SqlServerDbScriptExporter-$VERSION-$rid.tar.gz"; do
+                if [ -f "$file" ]; then echo "| $(describe "$rid") | \`$(basename "$file")\` |"; fi
+              done
+            done
+            for file in dist/SqlServerDbScriptExporter-*; do
+              name="$(basename "$file")"
+              rid="${name#SqlServerDbScriptExporter-$VERSION-}"
+              rid="${rid%.zip}"
+              rid="${rid%.tar.gz}"
+              case "$listed" in *" $rid "*) ;; *) echo "| $(describe "$rid") | \`$name\` |" ;; esac
+            done
+            echo
+            echo "Each is a single self-contained executable: no .NET needed. Unpack it and run it - without arguments"
+            echo "it asks for everything, \`--help\` shows the options for scripted runs, \`--version\` the version."
+            echo
+            echo "- **macOS:** the app is not notarized. If macOS refuses to open it, run"
+            echo "  \`xattr -d com.apple.quarantine SqlServerDbScriptExporter\` once."
+            echo "- **Checking a download:** its SHA-256 is in \`SHA256SUMS.txt\`."
+            echo
+          } > notes.md
+          cat notes.md
+
+      # As a draft first, with all the files, and only then published: if an upload fails, no half-finished
+      # release is visible, and a re-run replaces the draft. An already published release is left alone (the
+      # create fails).
+      - name: Create the release
+        shell: bash
+        env:
+          PRERELEASE: ${{ needs.version.outputs.prerelease }}
+        run: |
+          if [ "$(gh release view "$GITHUB_REF_NAME" --json isDraft --jq .isDraft 2>/dev/null)" = true ]; then
+            echo "Deleting the draft left by an earlier attempt."
+            gh release delete "$GITHUB_REF_NAME" --yes
+          fi
+
+          prerelease=()
+          if [ "$PRERELEASE" = true ]; then prerelease=(--prerelease); fi
+          # --generate-notes adds GitHub's notes (changes since the previous release) after notes.md.
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --draft \
+            --verify-tag \
+            --title "SQL Server DB Script Exporter $VERSION" \
+            --notes-file notes.md \
+            --generate-notes \
+            "${prerelease[@]}"
+          gh release edit "$GITHUB_REF_NAME" --draft=false
